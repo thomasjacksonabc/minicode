@@ -1,0 +1,23 @@
+{
+  "name": "minicode-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm --workspace @minicode/shared run build && npm --workspace @minicode/agent-sidecar run build && npm --workspace minicode-assistant run build",
+    "typecheck": "npm --workspace @minicode/shared run typecheck && npm --workspace @minicode/agent-sidecar run typecheck && npm --workspace minicode-assistant run typecheck",
+    "lint": "npm --workspace @minicode/shared run lint && npm --workspace @minicode/agent-sidecar run lint && npm --workspace minicode-assistant run lint",
+    "validate:features": "tsx scripts/validate-features.ts",
+    "sync:agents-index": "tsx scripts/sync-agents-index.ts",
+    "check:agents-index": "tsx scripts/check-agents-index.ts",
+    "check": "npm run validate:features && npm run check:agents-index && npm run typecheck",
+    "package:extension": "npm --workspace minicode-assistant run package"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}

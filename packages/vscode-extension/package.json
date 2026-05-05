@@ -1,0 +1,187 @@
+{
+  "name": "minicode-assistant",
+  "displayName": "MiniCode Assistant",
+  "description": "Marketplace-safe AI coding assistant with local sidecar orchestration.",
+  "version": "0.1.0",
+  "private": true,
+  "publisher": "minicode",
+  "repository": {
+    "type": "git",
+    "url": "https://example.com/minicode-assistant.git"
+  },
+  "type": "module",
+  "files": [
+    "dist",
+    "media",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "engines": {
+    "vscode": "^1.99.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:minicode.askWithAssistant",
+    "onCommand:minicode.editWithAssistant",
+    "onLanguage:typescript",
+    "onLanguage:javascript",
+    "onLanguage:python"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "minicode.askWithAssistant",
+        "title": "Ask with Assistant"
+      },
+      {
+        "command": "minicode.editWithAssistant",
+        "title": "Edit with Assistant"
+      },
+      {
+        "command": "minicode.refreshProjectProgress",
+        "title": "Refresh Project Progress"
+      }
+    ],
+    "configuration": {
+      "title": "MiniCode Assistant",
+      "properties": {
+        "assistant.gateway.mode": {
+          "type": "string",
+          "enum": [
+            "embedded",
+            "external"
+          ],
+          "default": "external",
+          "description": "Whether to connect to an external sidecar or an embedded local one."
+        },
+        "assistant.gateway.baseUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:4317",
+          "description": "Base URL for the assistant sidecar gateway."
+        },
+        "assistant.provider.type": {
+          "type": "string",
+          "default": "mock",
+          "description": "Current provider family tracked for project configuration."
+        },
+        "assistant.provider.apiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "API key reference. Store secrets in SecretStorage for production."
+        },
+        "assistant.provider.modelscope.baseUrl": {
+          "type": "string",
+          "default": "https://api-inference.modelscope.cn",
+          "description": "Configured ModelScope endpoint."
+        },
+        "assistant.models.chat": {
+          "type": "string",
+          "default": "qwen-coder-plus"
+        },
+        "assistant.models.reasoning": {
+          "type": "string",
+          "default": "qwen3-32b"
+        },
+        "assistant.models.fast": {
+          "type": "string",
+          "default": "qwen2.5-coder-7b-instruct"
+        },
+        "assistant.models.completion": {
+          "type": "string",
+          "default": "qwen2.5-coder-7b-instruct"
+        },
+        "assistant.models.embedding": {
+          "type": "string",
+          "default": "bge-m3"
+        },
+        "assistant.tools.autoApprove": {
+          "type": "boolean",
+          "default": false
+        },
+        "assistant.tools.allowedCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "assistant.indexing.enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "assistant.inlineCompletions.enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "assistant.experimental.mcp.enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "assistant.projectIndex.enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "assistant.projectIndex.featuresFile": {
+          "type": "string",
+          "default": "features.json"
+        },
+        "assistant.projectIndex.agentsFile": {
+          "type": "string",
+          "default": "AGENTS.md"
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "minicode",
+          "title": "MiniCode",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "minicode": [
+        {
+          "id": "minicode.projectProgress",
+          "name": "Project Progress"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "minicode.askWithAssistant",
+        "key": "ctrl+alt+i",
+        "mac": "cmd+alt+i"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "minicode.askWithAssistant",
+          "group": "navigation"
+        },
+        {
+          "command": "minicode.editWithAssistant",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.99.0",
+    "@vscode/vsce": "^3.6.0"
+  }
+}
