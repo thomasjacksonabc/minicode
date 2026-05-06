@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { runInlineCompletion } from './api.js';
+import { readDependencyHints, summarizeWorkspace } from './projectIndex.js';
 
 export class AssistantInlineCompletionProvider implements vscode.InlineCompletionItemProvider {
   async provideInlineCompletionItems(
@@ -20,15 +21,19 @@ export class AssistantInlineCompletionProvider implements vscode.InlineCompletio
       .slice(0, 3)
       .map((editor) => ({
         fileName: editor.document.fileName,
+        languageId: editor.document.languageId,
         excerpt: editor.document.getText(new vscode.Range(new vscode.Position(0, 0), editor.document.positionAt(Math.min(500, editor.document.getText().length))))
       }));
+    const [workspaceSummary, dependencyHints] = await Promise.all([summarizeWorkspace(), readDependencyHints()]);
 
     const response = await runInlineCompletion({
       languageId: document.languageId,
       fileName: document.fileName,
       prefix,
       suffix,
-      neighbors
+      neighbors,
+      workspaceSummary,
+      dependencyHints
     });
 
     if (token.isCancellationRequested) {

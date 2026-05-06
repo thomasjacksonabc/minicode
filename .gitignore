@@ -34,6 +34,7 @@ AGENTS.md
 *.local.md
 *.private.md
 features.json
+reference.md
 
 # OS/editor noise
 .DS_Store

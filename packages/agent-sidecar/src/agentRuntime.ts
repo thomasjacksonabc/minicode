@@ -1,45 +1,105 @@
-import type { ChatTurnRequest, ChatTurnResponse, CompletionRequest, CompletionResponse } from '@minicode/shared';
+import type { ChatTurnRequest, ChatTurnResponse, CompletionRequest, CompletionResponse, ToolObservation } from '@minicode/shared';
+import type { SidecarConfig } from '@minicode/shared';
 import type { ModelAdapter } from './providers.js';
-import { summarizeProjectIndex } from './projectIndex.js';
-import { suggestToolCalls } from './tools.js';
+import { enrichChatContext, enrichCompletionContext } from './contextBuilder.js';
+import { renderChatPrompt, renderCompletionPrompt } from './promptTemplates.js';
+import type { ResolvedRoute } from './routing.js';
+import { resolveRoute } from './routing.js';
+import { reviewPrompt, reviewToolCalls } from './safety.js';
+import { buildUsageMetrics } from './telemetry.js';
+import { executeReadOnlyToolCalls, suggestToolCalls } from './tools.js';
 
 export class AgentRuntime {
-  constructor(private readonly adapter: ModelAdapter) {}
+  constructor(
+    private readonly adapter: ModelAdapter,
+    private readonly config: SidecarConfig
+  ) {}
+
+  private summarize(request: ChatTurnRequest, observations: ToolObservation[], warnings: string[]): string {
+    const summaryParts = [
+      request.context.projectIndexSummary ? `Project index: ${request.context.projectIndexSummary}` : undefined,
+      observations.length > 0 ? `Executed ${observations.length} read-only tool(s)` : undefined,
+      warnings.length > 0 ? `Safety warnings: ${warnings.length}` : undefined
+    ].filter(Boolean);
+    return summaryParts.join('. ');
+  }
 
   async runChat(request: ChatTurnRequest): Promise<ChatTurnResponse> {
-    const projectIndexSummary = request.context.projectIndexSummary || summarizeProjectIndex(request.cwd);
-    const enrichedRequest: ChatTurnRequest = {
+    const startedAt = Date.now();
+    const reviewed = reviewPrompt(request.prompt);
+    const enrichedRequest = enrichChatContext({
       ...request,
-      context: {
-        ...request.context,
-        projectIndexSummary
-      }
-    };
-
-    const toolCalls = suggestToolCalls(request.mode, request.prompt);
-    const completion = await this.adapter.completeChat(enrichedRequest);
-    const summary = projectIndexSummary
-      ? `Consulted project index. ${projectIndexSummary}`
-      : 'No project index was available.';
+      prompt: reviewed.sanitizedPrompt
+    });
+    const route: ResolvedRoute = resolveRoute(enrichedRequest, this.config);
+    const suggestedToolCalls = suggestToolCalls(enrichedRequest.mode, enrichedRequest.prompt, enrichedRequest.cwd);
+    const safeToolCalls = reviewToolCalls(suggestedToolCalls, this.config.tools.allowedCommands, reviewed.blockedTools);
+    const observations = executeReadOnlyToolCalls(safeToolCalls, enrichedRequest.cwd);
+    const pendingToolCalls = safeToolCalls.filter((call) => call.requiresApproval);
+    const { system, user } = renderChatPrompt(enrichedRequest, route, reviewed.warnings, observations);
+    const message = await this.adapter.completeChat({
+      model: route.model,
+      capability: route.capability,
+      system,
+      user,
+      temperature: route.temperature,
+      maxTokens: route.maxTokens
+    });
+    const metrics = buildUsageMetrics({
+      startedAt,
+      inputText: `${system}\n\n${user}`,
+      outputText: message,
+      capability: route.capability,
+      model: route.model,
+      provider: this.adapter.id,
+      promptVersion: route.promptVersion
+    });
 
     return {
       sessionId: request.sessionId,
       mode: request.mode,
-      message: completion,
-      toolCalls,
-      summary
+      message,
+      toolCalls: pendingToolCalls,
+      observations,
+      summary: this.summarize(enrichedRequest, observations, reviewed.warnings),
+      metrics
     };
   }
 
-  async runCompletion(request: CompletionRequest): Promise<CompletionResponse> {
-    const suggestions = await this.adapter.completeInline(request);
+  async runCompletion(request: CompletionRequest, cwd?: string): Promise<CompletionResponse> {
+    const startedAt = Date.now();
+    const enrichedRequest = enrichCompletionContext(request, cwd);
+    const prompt = renderCompletionPrompt(
+      enrichedRequest.prefix,
+      enrichedRequest.suffix,
+      enrichedRequest.neighbors,
+      enrichedRequest.workspaceSummary
+    );
+    const model = this.config.models.completion || this.config.provider.model;
+    const suggestions = await this.adapter.completeInline({
+      model,
+      prompt,
+      temperature: 0.15,
+      maxTokens: 240
+    });
+    const text = suggestions.join('\n').trim();
+    const metrics = buildUsageMetrics({
+      startedAt,
+      inputText: prompt,
+      outputText: text,
+      capability: 'completion',
+      model,
+      provider: this.adapter.id,
+      promptVersion: this.config.prompts.version
+    });
     return {
       items: suggestions
-        .filter((text) => text.length > 0)
-        .map((text) => ({
-          text,
-          detail: `Generated by ${this.adapter.id}`
-        }))
+        .filter((entry) => entry.trim().length > 0)
+        .map((entry) => ({
+          text: entry,
+          detail: `Generated by ${this.adapter.id} using ${model}`
+        })),
+      metrics
     };
   }
 }

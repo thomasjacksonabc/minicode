@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { AgentRuntime } from './agentRuntime.js';
 import { loadConfig } from './config.js';
 import { createModelAdapter } from './providers.js';
+import { getTelemetryHistory } from './telemetry.js';
 import { getToolRegistry } from './tools.js';
 import type { ChatTurnRequest, CompletionRequest } from '@minicode/shared';
 
@@ -20,18 +21,22 @@ function writeJson(res: ServerResponse, statusCode: number, data: unknown): void
 
 export async function startServer(): Promise<void> {
   const config = loadConfig();
-  const adapter = createModelAdapter(config.provider.type, config.provider.baseUrl);
-  const runtime = new AgentRuntime(adapter);
+  const adapter = createModelAdapter(config.provider.type, config.provider.baseUrl, config.provider.apiKey);
+  const runtime = new AgentRuntime(adapter, config);
 
   const server = createServer(async (req, res) => {
     const url = req.url || '/';
     try {
       if (req.method === 'GET' && url === '/health') {
-        writeJson(res, 200, { ok: true, provider: adapter.id });
+        writeJson(res, 200, { ok: true, provider: adapter.id, promptVersion: config.prompts.version });
         return;
       }
       if (req.method === 'GET' && url === '/models') {
-        writeJson(res, 200, { models: [config.provider.model], provider: config.provider.type });
+        writeJson(res, 200, { models: config.models, provider: config.provider.type });
+        return;
+      }
+      if (req.method === 'GET' && url === '/telemetry') {
+        writeJson(res, 200, { items: getTelemetryHistory() });
         return;
       }
       if ((req.method === 'GET' || req.method === 'POST') && url === '/index/search') {

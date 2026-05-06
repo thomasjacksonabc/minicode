@@ -7,6 +7,7 @@
   ],
   "scripts": {
     "build": "npm --workspace @minicode/shared run build && npm --workspace @minicode/agent-sidecar run build && npm --workspace minicode-assistant run build",
+    "test": "npm --workspace @minicode/agent-sidecar run test",
     "typecheck": "npm --workspace @minicode/shared run typecheck && npm --workspace @minicode/agent-sidecar run typecheck && npm --workspace minicode-assistant run typecheck",
     "lint": "npm --workspace @minicode/shared run lint && npm --workspace @minicode/agent-sidecar run lint && npm --workspace minicode-assistant run lint",
     "validate:features": "tsx scripts/validate-features.ts",
