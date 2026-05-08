@@ -1,0 +1,42 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "minicode: demo",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "minicode: build",
+        "minicode: sidecar"
+      ]
+    },
+    {
+      "label": "minicode: build",
+      "type": "shell",
+      "command": "npm run build",
+      "problemMatcher": "$tsc"
+    },
+    {
+      "label": "minicode: sidecar",
+      "type": "shell",
+      "command": "npm --workspace @minicode/agent-sidecar run dev",
+      "isBackground": true,
+      "options": {
+        "env": {
+          "MINICODE_PROVIDER_TYPE": "mock",
+          "MINICODE_ALLOWED_COMMANDS": "npm test,npm run build,git status"
+        }
+      },
+      "problemMatcher": {
+        "owner": "custom",
+        "pattern": {
+          "regexp": "."
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".",
+          "endsPattern": "MiniCode sidecar listening on http://"
+        }
+      }
+    }
+  ]
+}

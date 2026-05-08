@@ -8,11 +8,33 @@ const PROMPT_INJECTION_PATTERNS = [
   /exfiltrat(e|ion)|dump secrets|print env/i,
   /sudo|rm\s+-rf|format c:/i
 ];
+const OUTPUT_FILTER_RULES = [
+  {
+    pattern: /\brm\s+-rf\b.*|Remove-Item\s+-Recurse|del\s+\/[sq]/i,
+    replacement: '[filtered dangerous deletion command]',
+    warning: 'Filtered dangerous deletion command from output'
+  },
+  {
+    pattern: /(system prompt|developer prompt|api[_ -]?key|secret|token|password)/i,
+    replacement: '[filtered sensitive content]',
+    warning: 'Filtered sensitive prompt or secret reference from output'
+  },
+  {
+    pattern: /\b(sudo|bypass|disable).*(guardrail|approval|safety)|ignore previous instructions/i,
+    replacement: '[filtered unsafe privilege escalation guidance]',
+    warning: 'Filtered unsafe privilege escalation guidance from output'
+  }
+] as const;
 
 export interface SafetyReview {
   sanitizedPrompt: string;
   warnings: string[];
   blockedTools: string[];
+}
+
+export interface OutputFilterResult {
+  sanitizedText: string;
+  warnings: string[];
 }
 
 export function reviewPrompt(prompt: string): SafetyReview {
@@ -36,4 +58,21 @@ export function reviewToolCalls(toolCalls: ToolCall[], allowedCommands: string[]
     }
     return allowedCommands.some((prefix) => command.startsWith(prefix));
   });
+}
+
+export function filterOutputText(text: string): OutputFilterResult {
+  let sanitizedText = text;
+  const warnings: string[] = [];
+
+  for (const rule of OUTPUT_FILTER_RULES) {
+    if (rule.pattern.test(sanitizedText)) {
+      warnings.push(rule.warning);
+      sanitizedText = sanitizedText.replace(rule.pattern, rule.replacement);
+    }
+  }
+
+  return {
+    sanitizedText,
+    warnings
+  };
 }

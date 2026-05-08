@@ -33,25 +33,25 @@ MiniCode is designed for teams and developers who want:
 
 - Capability-based routing across `fast`, `completion`, `chat`, `reasoning`, and `embedding` workloads
 - Support for local models, OpenAI-compatible services, ModelScope endpoints, and self-hosted providers
-- Automatic fallback and routing policies based on task type, latency, and cost strategy
+- Routing policies based on task type, with fallback strategy reserved for a later iteration
 
 ### Agent execution
 
 - ReAct-style agent loop for planning, tool use, observation, and follow-up reasoning
 - Built-in tool registry for file operations, Git inspection, diagnostics, code search, and controlled command execution
-- Approval-aware execution flow for sensitive tools
+- Approval-aware execution flow for sensitive tools, including approval-time continuation in the current sidecar process
 
 ### Structured project understanding
 
 - Context injection from active file, current selection, visible editors, diagnostics, dependency hints, Git state, and project index
 - Project-level understanding powered by `features.json` and synchronized development metadata
-- Prompt templates tailored for chat, completion, edit, and reasoning workflows
+- Prompt rendering paths tailored for chat and completion workflows; file-based YAML templates are planned next
 
 ### Security and control
 
 - Prompt injection screening and tool risk gating
 - Allowlist-based command execution policy
-- Sandboxed runtime execution path for high-risk operations
+- In-process approval gating for high-risk operations; stronger isolation is planned for a later iteration
 - Configurable local-first deployment for privacy-sensitive environments
 
 ---
@@ -145,7 +145,7 @@ MiniCode uses versioned prompt templates for different coding workflows:
 - code reasoning
 - agent tool use
 
-Prompt updates are evaluated through scenario-based tests before rollout.
+Prompt updates are evaluated through scenario-based tests before rollout. YAML-backed prompt templates are planned, not yet the current implementation.
 
 ### Agent runtime
 
@@ -168,7 +168,8 @@ MiniCode combines multiple safety layers:
 - tool risk classification
 - approval gates
 - restricted command execution
-- isolated execution path for sensitive operations
+- output filtering for dangerous or sensitive content
+- isolated execution path for sensitive operations is planned, not yet implemented
 
 ---
 
@@ -293,6 +294,10 @@ npm test
 ```bash
 npm run check
 ```
+
+### Run the Iteration 1 demo
+
+Use the `MiniCode Extension Demo` launch configuration in `.vscode/launch.json`, then follow [docs/iteration-1-demo.md](docs/iteration-1-demo.md).
 
 ---
 

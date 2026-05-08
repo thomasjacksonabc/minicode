@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { ChatTurnRequest, ChatTurnResponse, CompletionRequest, CompletionResponse } from './types.js';
+import type { ChatTurnRequest, ChatTurnResponse, CompletionRequest, CompletionResponse, ToolApprovalRequest, ToolApprovalResponse } from './types.js';
 
 function baseUrl(): string {
   return vscode.workspace.getConfiguration().get<string>('assistant.gateway.baseUrl', 'http://127.0.0.1:4317');
@@ -15,7 +15,8 @@ async function postJson<TRequest, TResponse>(path: string, payload: TRequest): P
   });
 
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status} ${response.statusText}`);
+    const body = await response.text();
+    throw new Error(`Request failed: ${response.status} ${response.statusText}${body ? ` - ${body}` : ''}`);
   }
 
   return (await response.json()) as TResponse;
@@ -29,6 +30,6 @@ export async function runInlineCompletion(request: CompletionRequest): Promise<C
   return postJson<CompletionRequest, CompletionResponse>('/completion/inline', request);
 }
 
-export async function approveTool(toolCallId: string, approved: boolean): Promise<void> {
-  await postJson('/tools/approve', { toolCallId, approved });
+export async function approveTool(request: ToolApprovalRequest): Promise<ToolApprovalResponse> {
+  return postJson<ToolApprovalRequest, ToolApprovalResponse>('/tools/approve', request);
 }

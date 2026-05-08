@@ -2,7 +2,7 @@ import * as crypto from 'node:crypto';
 import * as vscode from 'vscode';
 import { approveTool, runChat } from './api.js';
 import { getWorkspaceRoot, readDependencyHints, readGitSnapshot, summarizeFeatures, summarizeWorkspace } from './projectIndex.js';
-import type { AgentMode, AttachmentRef, ChatTurnRequest } from './types.js';
+import type { AgentMode, AttachmentRef, ChatTurnRequest, ChatTurnResponse } from './types.js';
 
 function modeFromPrompt(prompt: string): AgentMode {
   if (prompt.startsWith('/plan')) {
@@ -69,23 +69,14 @@ async function buildRequest(prompt: string): Promise<ChatTurnRequest> {
 
 export function registerChatParticipant(context: vscode.ExtensionContext): void {
   const participant = vscode.chat.createChatParticipant('minicode.assistant', async (request, chatContext, stream) => {
-    const result = await runChat(await buildRequest(request.prompt));
-    stream.markdown(result.message);
-    if (result.summary) {
-      stream.markdown(`\n\n${result.summary}`);
-    }
-    for (const observation of result.observations) {
-      stream.markdown(`\n\n[${observation.status}] ${observation.tool}: ${observation.summary}`);
-    }
-    for (const toolCall of result.toolCalls) {
-      const approved = await confirmToolCall(toolCall.tool);
-      await approveTool(toolCall.id, approved);
-      stream.markdown(`\n\nTool ${toolCall.tool}: ${approved ? 'approved' : 'denied'}`);
-    }
-    if (result.metrics) {
-      stream.markdown(
-        `\n\nModel: ${result.metrics.model} | Route: ${result.metrics.capability} | Latency: ${result.metrics.durationMs} ms | Est. cost: $${result.metrics.estimatedCostUsd}`
-      );
+    try {
+      const result = await runChat(await buildRequest(request.prompt));
+      renderChatResult(stream, result);
+      await processPendingToolCalls(stream, result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      stream.markdown(`\n\nRequest failed: ${message}`);
+      void vscode.window.showErrorMessage(`MiniCode request failed: ${message}`);
     }
   });
 
@@ -93,13 +84,78 @@ export function registerChatParticipant(context: vscode.ExtensionContext): void 
   context.subscriptions.push(participant);
 }
 
-async function confirmToolCall(toolName: string): Promise<boolean> {
+async function processPendingToolCalls(stream: vscode.ChatResponseStream, result: ChatTurnResponse): Promise<void> {
+  let pendingToolCalls = result.toolCalls;
+  let sessionId = result.sessionId;
+
+  while (pendingToolCalls.length > 0) {
+    const toolCall = pendingToolCalls[0];
+    const approved = await confirmToolCall(toolCall.tool, toolCall.input);
+    const approvalResult = await approveTool({
+      sessionId,
+      toolCallId: toolCall.id,
+      approved
+    });
+
+    stream.markdown(`\n\nTool ${describeToolCall(toolCall.tool, toolCall.input)}: ${approved ? 'approved' : 'denied'}`);
+
+    if (!approvalResult.resumed) {
+      const message = approvalResult.message || 'The sidecar could not resume this approval session.';
+      stream.markdown(`\n\nApproval continuation failed: ${message}`);
+      void vscode.window.showWarningMessage(`MiniCode approval continuation failed: ${message}`);
+      return;
+    }
+
+    if (approvalResult.response) {
+      sessionId = approvalResult.response.sessionId;
+      renderChatResult(stream, approvalResult.response, true);
+      pendingToolCalls = approvalResult.response.toolCalls;
+      continue;
+    }
+
+    pendingToolCalls = pendingToolCalls.slice(1);
+  }
+}
+
+function renderChatResult(stream: vscode.ChatResponseStream, result: ChatTurnResponse, isContinuation = false): void {
+  if (isContinuation) {
+    stream.markdown('\n\n---');
+  }
+  stream.markdown(isContinuation ? `\n\nContinuation:\n\n${result.message}` : result.message);
+  if (result.continuation?.pending) {
+    stream.markdown('\n\nPending tool approvals remain.');
+  }
+  if (result.summary) {
+    stream.markdown(`\n\n${result.summary}`);
+  }
+  for (const observation of result.observations) {
+    const suffix = observation.toolCallId ? ` (${observation.toolCallId})` : '';
+    stream.markdown(`\n\n[${observation.status}] ${observation.tool}${suffix}: ${observation.summary}`);
+  }
+  if (result.metrics) {
+    stream.markdown(
+      `\n\nModel: ${result.metrics.model} | Route: ${result.metrics.capability} | Latency: ${result.metrics.durationMs} ms | Est. cost: $${result.metrics.estimatedCostUsd}`
+    );
+  }
+}
+
+function describeToolCall(toolName: string, input: Record<string, unknown>): string {
+  if (toolName === 'run_terminal' && typeof input.command === 'string') {
+    return `${toolName} \`${input.command}\``;
+  }
+  if (toolName === 'apply_patch' && typeof input.target === 'string') {
+    return `${toolName} \`${input.target}\``;
+  }
+  return toolName;
+}
+
+async function confirmToolCall(toolName: string, input: Record<string, unknown>): Promise<boolean> {
   const autoApprove = vscode.workspace.getConfiguration().get<boolean>('assistant.tools.autoApprove', false);
   if (autoApprove) {
     return true;
   }
   const choice = await vscode.window.showInformationMessage(
-    `Assistant wants to use ${toolName}.`,
+    `Assistant wants to use ${describeToolCall(toolName, input)}.`,
     { modal: true },
     'Approve'
   );

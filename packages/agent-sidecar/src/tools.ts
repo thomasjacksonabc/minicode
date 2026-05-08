@@ -33,6 +33,13 @@ function safeExec(command: string, args: string[], cwd?: string): string | undef
   }
 }
 
+function isAllowedCommand(command: string, allowedCommands: string[]): boolean {
+  if (allowedCommands.length === 0) {
+    return false;
+  }
+  return allowedCommands.some((prefix) => command.startsWith(prefix));
+}
+
 function simpleFindFiles(root: string, limit = 12): string[] {
   const result: string[] = [];
   const queue = [root];
@@ -117,18 +124,21 @@ export function executeReadOnlyToolCalls(toolCalls: ToolCall[], cwd?: string): T
       switch (tool.tool) {
         case 'git_status':
           return {
+            toolCallId: tool.id,
             tool: tool.tool,
             status: 'executed',
             summary: safeExec('git', ['status', '--short'], root) || 'git status unavailable'
           };
         case 'git_diff':
           return {
+            toolCallId: tool.id,
             tool: tool.tool,
             status: 'executed',
             summary: (safeExec('git', ['diff', '--', '.'], root) || 'git diff unavailable').slice(0, 1800)
           };
         case 'find_files':
           return {
+            toolCallId: tool.id,
             tool: tool.tool,
             status: 'executed',
             summary: simpleFindFiles(root).join(', ') || 'No files found'
@@ -136,16 +146,74 @@ export function executeReadOnlyToolCalls(toolCalls: ToolCall[], cwd?: string): T
         case 'read_file': {
           const target = typeof tool.input.path === 'string' ? resolve(root, tool.input.path) : undefined;
           if (!target || !existsSync(target)) {
-            return { tool: tool.tool, status: 'blocked', summary: 'Target file not found' };
+            return { toolCallId: tool.id, tool: tool.tool, status: 'blocked', summary: 'Target file not found' };
           }
           return {
+            toolCallId: tool.id,
             tool: tool.tool,
             status: 'executed',
             summary: readFileSync(target, 'utf8').slice(0, 1800)
           };
         }
         default:
-          return { tool: tool.tool, status: 'suggested', summary: 'No executor registered yet' };
+          return { toolCallId: tool.id, tool: tool.tool, status: 'suggested', summary: 'No executor registered yet' };
       }
     });
+}
+
+export function executeApprovalToolCall(toolCall: ToolCall, cwd: string | undefined, allowedCommands: string[]): ToolObservation {
+  const root = cwd || process.cwd();
+  if (!toolCall.requiresApproval) {
+    return {
+      toolCallId: toolCall.id,
+      tool: toolCall.tool,
+      status: 'blocked',
+      summary: 'Tool does not require approval execution'
+    };
+  }
+
+  switch (toolCall.tool) {
+    case 'run_terminal': {
+      const command = typeof toolCall.input.command === 'string' ? toolCall.input.command.trim() : '';
+      if (!command) {
+        return {
+          toolCallId: toolCall.id,
+          tool: toolCall.tool,
+          status: 'blocked',
+          summary: 'No command provided'
+        };
+      }
+      if (!isAllowedCommand(command, allowedCommands)) {
+        return {
+          toolCallId: toolCall.id,
+          tool: toolCall.tool,
+          status: 'blocked',
+          summary: `Command blocked by allowlist: ${command}`
+        };
+      }
+      const output = safeExec('powershell', ['-NoProfile', '-Command', command], root);
+      return {
+        toolCallId: toolCall.id,
+        tool: toolCall.tool,
+        status: output === undefined ? 'blocked' : 'executed',
+        summary: output === undefined ? `Command failed: ${command}` : output.slice(0, 1800) || 'Command completed with no output'
+      };
+    }
+    case 'apply_patch': {
+      const target = typeof toolCall.input.target === 'string' ? toolCall.input.target : 'unknown-target';
+      return {
+        toolCallId: toolCall.id,
+        tool: toolCall.tool,
+        status: 'executed',
+        summary: `apply_patch approved for ${target}; execution is stubbed in Iteration 1`
+      };
+    }
+    default:
+      return {
+        toolCallId: toolCall.id,
+        tool: toolCall.tool,
+        status: 'blocked',
+        summary: 'No approval executor registered'
+      };
+  }
 }

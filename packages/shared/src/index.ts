@@ -60,6 +60,7 @@ export interface ToolCall {
 }
 
 export interface ToolObservation {
+  toolCallId?: string;
   tool: string;
   status: ToolObservationStatus;
   summary: string;
@@ -82,8 +83,27 @@ export interface ChatTurnResponse {
   message: string;
   toolCalls: ToolCall[];
   observations: ToolObservation[];
+  continuation?: {
+    pending: boolean;
+    resumedFromToolCallId?: string;
+  };
   summary?: string;
   metrics?: UsageMetrics;
+}
+
+export interface ToolApprovalRequest {
+  sessionId: string;
+  toolCallId: string;
+  approved: boolean;
+}
+
+export interface ToolApprovalResponse {
+  sessionId: string;
+  toolCallId: string;
+  approved: boolean;
+  resumed: boolean;
+  message?: string;
+  response?: ChatTurnResponse;
 }
 
 export interface CompletionRequest {

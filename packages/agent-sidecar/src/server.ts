@@ -4,7 +4,7 @@ import { loadConfig } from './config.js';
 import { createModelAdapter } from './providers.js';
 import { getTelemetryHistory } from './telemetry.js';
 import { getToolRegistry } from './tools.js';
-import type { ChatTurnRequest, CompletionRequest } from '@minicode/shared';
+import type { ChatTurnRequest, CompletionRequest, ToolApprovalRequest } from '@minicode/shared';
 
 async function readJson<T>(req: IncomingMessage): Promise<T> {
   const chunks: Buffer[] = [];
@@ -59,8 +59,8 @@ export async function startServer(): Promise<void> {
         return;
       }
       if (req.method === 'POST' && url === '/tools/approve') {
-        const body = await readJson<{ toolCallId: string; approved: boolean }>(req);
-        writeJson(res, 200, body);
+        const body = await readJson<ToolApprovalRequest>(req);
+        writeJson(res, 200, await runtime.approveToolCall(body.sessionId, body.toolCallId, body.approved));
         return;
       }
       if (req.method === 'GET' && url === '/tools') {
