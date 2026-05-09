@@ -1,0 +1,28 @@
+name: completion-default
+version: v2
+scenario: completion
+capabilities:
+  - completion
+variables:
+  - workspaceSummary
+  - dependencyHints
+  - fileName
+  - languageId
+  - prefix
+  - suffix
+  - neighborFiles
+body: |
+  Complete the code at the cursor for {{fileName}} ({{languageId}}).
+  Return code only, with no markdown fences or explanation.
+
+  {{workspaceSummary}}
+
+  {{dependencyHints}}
+
+  Prefix:
+  {{prefix}}
+
+  Suffix:
+  {{suffix}}
+
+  {{neighborFiles}}

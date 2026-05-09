@@ -30,7 +30,25 @@ export function loadConfig(): SidecarConfig {
       autoApprove: process.env.MINICODE_AUTO_APPROVE === 'true'
     },
     prompts: {
-      version: process.env.MINICODE_PROMPT_VERSION || 'v1'
+      version: process.env.MINICODE_PROMPT_VERSION || 'v2',
+      directory: process.env.MINICODE_PROMPT_DIRECTORY,
+      fallback: (process.env.MINICODE_PROMPT_FALLBACK as SidecarConfig['prompts']['fallback']) || 'built-in'
+    },
+    cache: {
+      enabled: process.env.MINICODE_CACHE_ENABLED !== 'false',
+      maxEntries: Number(process.env.MINICODE_CACHE_MAX_ENTRIES || 100)
+    },
+    streaming: {
+      ssePath: process.env.MINICODE_STREAM_SSE_PATH || '/chat/stream'
+    },
+    indexing: {
+      enabled: process.env.MINICODE_INDEXING_ENABLED !== 'false',
+      directory: process.env.MINICODE_INDEX_DIRECTORY,
+      chunkSize: Number(process.env.MINICODE_INDEX_CHUNK_SIZE || 800),
+      chunkOverlap: Number(process.env.MINICODE_INDEX_CHUNK_OVERLAP || 120),
+      maxResults: Number(process.env.MINICODE_INDEX_MAX_RESULTS || 5),
+      exclude: splitCsv(process.env.MINICODE_INDEX_EXCLUDE),
+      includeExtensions: splitCsv(process.env.MINICODE_INDEX_EXTENSIONS)
     }
   };
 }

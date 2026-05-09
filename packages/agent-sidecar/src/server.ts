@@ -4,7 +4,14 @@ import { loadConfig } from './config.js';
 import { createModelAdapter } from './providers.js';
 import { getTelemetryHistory } from './telemetry.js';
 import { getToolRegistry } from './tools.js';
-import type { ChatTurnRequest, CompletionRequest, ToolApprovalRequest } from '@minicode/shared';
+import type {
+  ChatTurnRequest,
+  CompletionRequest,
+  ProjectIndexBuildRequest,
+  ProjectSearchRequest,
+  SidecarConfig,
+  ToolApprovalRequest
+} from '@minicode/shared';
 
 async function readJson<T>(req: IncomingMessage): Promise<T> {
   const chunks: Buffer[] = [];
@@ -19,16 +26,26 @@ function writeJson(res: ServerResponse, statusCode: number, data: unknown): void
   res.end(JSON.stringify(data));
 }
 
-export async function startServer(): Promise<void> {
-  const config = loadConfig();
-  const adapter = createModelAdapter(config.provider.type, config.provider.baseUrl, config.provider.apiKey);
-  const runtime = new AgentRuntime(adapter, config);
+function writeSseEvent(res: ServerResponse, event: string, data: unknown): void {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
 
-  const server = createServer(async (req, res) => {
+export function createSidecarServer(deps?: {
+  config?: SidecarConfig;
+  runtime?: AgentRuntime;
+  adapterId?: string;
+}) {
+  const config = deps?.config || loadConfig();
+  const adapter = deps?.runtime ? undefined : createModelAdapter(config.provider.type, config.provider.baseUrl, config.provider.apiKey);
+  const runtime = deps?.runtime || new AgentRuntime(adapter!, config);
+  const adapterId = deps?.adapterId || adapter?.id || config.provider.type;
+
+  return createServer(async (req, res) => {
     const url = req.url || '/';
     try {
       if (req.method === 'GET' && url === '/health') {
-        writeJson(res, 200, { ok: true, provider: adapter.id, promptVersion: config.prompts.version });
+        writeJson(res, 200, { ok: true, provider: adapterId, promptVersion: config.prompts.version });
         return;
       }
       if (req.method === 'GET' && url === '/models') {
@@ -39,13 +56,37 @@ export async function startServer(): Promise<void> {
         writeJson(res, 200, { items: getTelemetryHistory() });
         return;
       }
-      if ((req.method === 'GET' || req.method === 'POST') && url === '/index/search') {
-        writeJson(res, 200, { items: [], query: req.method === 'POST' ? await readJson<{ query?: string }>(req) : undefined });
+      if (req.method === 'POST' && url === '/index/build') {
+        const body = await readJson<ProjectIndexBuildRequest>(req);
+        writeJson(res, 200, await runtime.buildProjectIndex(body.cwd, body.force));
+        return;
+      }
+      if (req.method === 'POST' && url === '/index/search') {
+        const body = await readJson<ProjectSearchRequest>(req);
+        writeJson(res, 200, await runtime.searchProjectIndex(body));
         return;
       }
       if (req.method === 'POST' && url === '/chat/stream') {
         const body = await readJson<ChatTurnRequest>(req);
-        writeJson(res, 200, await runtime.runChat(body));
+        res.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache, no-transform',
+          connection: 'keep-alive'
+        });
+        res.flushHeaders?.();
+        try {
+          await runtime.streamChat(body, async (event) => {
+            writeSseEvent(res, event.type, event);
+          });
+        } catch (error) {
+          writeSseEvent(res, 'error', {
+            type: 'error',
+            message: error instanceof Error ? error.message : String(error)
+          });
+          writeSseEvent(res, 'done', { type: 'done' });
+        } finally {
+          res.end();
+        }
         return;
       }
       if (req.method === 'POST' && url === '/agent/run') {
@@ -74,6 +115,13 @@ export async function startServer(): Promise<void> {
       });
     }
   });
+}
+
+export async function startServer(): Promise<void> {
+  const config = loadConfig();
+  const adapter = createModelAdapter(config.provider.type, config.provider.baseUrl, config.provider.apiKey);
+  const runtime = new AgentRuntime(adapter, config);
+  const server = createSidecarServer({ config, runtime, adapterId: adapter.id });
 
   await new Promise<void>((resolve) => {
     server.listen(config.port, config.host, resolve);

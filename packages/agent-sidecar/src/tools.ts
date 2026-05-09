@@ -1,8 +1,9 @@
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { ToolCall, ToolObservation } from '@minicode/shared';
+import type { ChatTurnRequest, SidecarConfig, ToolCall, ToolObservation } from '@minicode/shared';
+import { isCommandRisky } from './safety.js';
 
 export interface ToolDefinition {
   name: string;
@@ -21,16 +22,117 @@ const registry: ToolDefinition[] = [
   { name: 'run_terminal', description: 'Execute terminal commands', readOnly: false, requiresApproval: true }
 ];
 
-function safeExec(command: string, args: string[], cwd?: string): string | undefined {
+const DEFAULT_TIMEOUT_MS = 30000;
+const DEFAULT_MAX_OUTPUT_BYTES = 50 * 1024;
+
+export interface ExecutionStrategy {
+  mode: 'process' | 'none';
+  shouldIsolate: (command: string) => boolean;
+}
+
+export function createExecutionStrategy(config?: SidecarConfig['execution']): ExecutionStrategy {
+  const isolationMode = config?.isolationMode || 'none';
+  return {
+    mode: isolationMode,
+    shouldIsolate: (command: string) => {
+      if (isolationMode === 'none') {
+        return false;
+      }
+      return isCommandRisky(command);
+    }
+  };
+}
+
+export interface IsolatedExecutionOptions {
+  command: string;
+  args: string[];
+  cwd?: string;
+  timeoutMs: number;
+  maxOutputBytes: number;
+}
+
+export async function executeInIsolation(options: IsolatedExecutionOptions): Promise<{ output: string | undefined; timedOut: boolean }> {
+  return new Promise((resolve) => {
+    let output = '';
+    let timedOut = false;
+    const proc = spawn(options.command, options.args, {
+      cwd: options.cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, NODE_ENV: 'restricted' }
+    });
+
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      proc.kill('SIGKILL');
+    }, options.timeoutMs);
+
+    proc.stdout?.on('data', (data: Buffer) => {
+      const chunk = data.toString('utf8');
+      if (output.length + chunk.length <= options.maxOutputBytes) {
+        output += chunk;
+      } else {
+        const remaining = options.maxOutputBytes - output.length;
+        if (remaining > 0) {
+          output += chunk.slice(0, remaining);
+        }
+        timedOut = true;
+        proc.kill('SIGKILL');
+      }
+    });
+
+    proc.stderr?.on('data', (data: Buffer) => {
+      const chunk = data.toString('utf8');
+      if (output.length + chunk.length <= options.maxOutputBytes) {
+        output += chunk;
+      }
+    });
+
+    proc.on('close', () => {
+      clearTimeout(timeoutId);
+      resolve({ output: output.trim() || undefined, timedOut });
+    });
+
+    proc.on('error', () => {
+      clearTimeout(timeoutId);
+      resolve({ output: undefined, timedOut: false });
+    });
+  });
+}
+
+function safeExec(command: string, args: string[], cwd?: string, timeoutMs?: number): string | undefined {
   try {
-    return execFileSync(command, args, {
+    const options: {
+      cwd?: string;
+      encoding: 'utf8';
+      stdio: ['ignore', 'pipe', 'pipe' | 'ignore'];
+      timeout?: number;
+      maxBuffer?: number;
+    } = {
       cwd,
       encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore']
-    }).trim();
-  } catch {
+      stdio: ['ignore', 'pipe', 'pipe']
+    };
+    if (timeoutMs && timeoutMs > 0) {
+      options.timeout = timeoutMs;
+    }
+    const result = execFileSync(command, args, options);
+    return result.trim();
+  } catch (error) {
+    if (error && typeof error === 'object' && 'killed' in error && (error as { killed: boolean }).killed) {
+      return undefined;
+    }
     return undefined;
   }
+}
+
+function truncateOutput(output: string, maxBytes: number): { text: string; truncated: boolean } {
+  const encoder = new TextEncoder();
+  const encoded = encoder.encode(output);
+  if (encoded.length <= maxBytes) {
+    return { text: output, truncated: false };
+  }
+  const truncated = new TextDecoder().decode(encoded.slice(0, maxBytes));
+  return { text: truncated, truncated: true };
 }
 
 function isAllowedCommand(command: string, allowedCommands: string[]): boolean {
@@ -71,7 +173,45 @@ export function getToolRegistry(): ToolDefinition[] {
   return registry;
 }
 
-export function suggestToolCalls(mode: string, prompt: string, cwd?: string): ToolCall[] {
+function inferPatchInput(prompt: string, selection?: string): Record<string, unknown> {
+  const quotedReplaceMatch = prompt.match(/replace\s+["'`](.+?)["'`]\s+with\s+["'`](.+?)["'`]/i);
+  if (quotedReplaceMatch) {
+    return {
+      target: 'active-file',
+      edits: [{ find: quotedReplaceMatch[1], replace: quotedReplaceMatch[2] }]
+    };
+  }
+
+  const quotedChangeMatch = prompt.match(/change\s+["'`](.+?)["'`]\s+to\s+["'`](.+?)["'`]/i);
+  if (quotedChangeMatch) {
+    return {
+      target: 'active-file',
+      edits: [{ find: quotedChangeMatch[1], replace: quotedChangeMatch[2] }]
+    };
+  }
+
+  const numericReplaceMatch = prompt.match(/replace\s+(\d+)\s+with\s+(\d+)/i);
+  if (numericReplaceMatch) {
+    return {
+      target: 'active-file',
+      edits: [{ find: numericReplaceMatch[1], replace: numericReplaceMatch[2] }]
+    };
+  }
+
+  if (selection) {
+    const appendMatch = prompt.match(/append\s+["'`](.+?)["'`]/i);
+    if (appendMatch) {
+      return {
+        target: 'active-file',
+        appendText: appendMatch[1]
+      };
+    }
+  }
+
+  return { target: 'active-file' };
+}
+
+export function suggestToolCalls(mode: string, prompt: string, cwd?: string, selection?: string): ToolCall[] {
   const calls: ToolCall[] = [];
   if (/git status|working tree|changed files/i.test(prompt)) {
     calls.push({
@@ -97,11 +237,11 @@ export function suggestToolCalls(mode: string, prompt: string, cwd?: string): To
       requiresApproval: false
     });
   }
-  if (/edit|change|patch|fix/i.test(prompt) && mode !== 'plan' && mode !== 'ask') {
+  if (/edit|change|patch|fix|replace/i.test(prompt) && mode !== 'plan' && mode !== 'ask') {
     calls.push({
       id: randomUUID(),
       tool: 'apply_patch',
-      input: { target: 'active-file' },
+      input: inferPatchInput(prompt, selection),
       requiresApproval: true
     });
   }
@@ -161,7 +301,113 @@ export function executeReadOnlyToolCalls(toolCalls: ToolCall[], cwd?: string): T
     });
 }
 
-export function executeApprovalToolCall(toolCall: ToolCall, cwd: string | undefined, allowedCommands: string[]): ToolObservation {
+function resolveToolTargetPath(toolCall: ToolCall, request: ChatTurnRequest, root: string): string | undefined {
+  if (typeof toolCall.input.path === 'string') {
+    return resolve(root, toolCall.input.path);
+  }
+  if (toolCall.input.target === 'active-file' && request.context.activeFile) {
+    return resolve(root, request.context.activeFile);
+  }
+  return undefined;
+}
+
+function applyStructuredEdits(original: string, edits: Array<{ find: string; replace: string }>): { updatedText?: string; failure?: string } {
+  let next = original;
+  for (const edit of edits) {
+    if (!edit.find) {
+      return { failure: 'Patch edit is missing a non-empty find value' };
+    }
+    if (!next.includes(edit.find)) {
+      return { failure: `Patch edit could not find target text: ${edit.find.slice(0, 80)}` };
+    }
+    next = next.replace(edit.find, edit.replace);
+  }
+  return { updatedText: next };
+}
+
+function executeApplyPatch(toolCall: ToolCall, request: ChatTurnRequest, root: string): ToolObservation {
+  const targetPath = resolveToolTargetPath(toolCall, request, root);
+  if (!targetPath || !existsSync(targetPath)) {
+    return {
+      toolCallId: toolCall.id,
+      tool: toolCall.tool,
+      status: 'blocked',
+      summary: 'Patch target file not found'
+    };
+  }
+
+  const current = readFileSync(targetPath, 'utf8');
+  if (typeof toolCall.input.replaceFile === 'string') {
+    writeFileSync(targetPath, toolCall.input.replaceFile, 'utf8');
+    return {
+      toolCallId: toolCall.id,
+      tool: toolCall.tool,
+      status: 'executed',
+      summary: `Replaced file contents for ${relative(root, targetPath)}`
+    };
+  }
+
+  if (typeof toolCall.input.appendText === 'string') {
+    writeFileSync(targetPath, `${current}${toolCall.input.appendText}`, 'utf8');
+    return {
+      toolCallId: toolCall.id,
+      tool: toolCall.tool,
+      status: 'executed',
+      summary: `Appended text to ${relative(root, targetPath)}`
+    };
+  }
+
+  if (Array.isArray(toolCall.input.edits)) {
+    const edits = toolCall.input.edits.filter(
+      (value): value is { find: string; replace: string } =>
+        Boolean(value) &&
+        typeof value === 'object' &&
+        'find' in value &&
+        'replace' in value &&
+        typeof value.find === 'string' &&
+        typeof value.replace === 'string'
+    );
+    if (edits.length === 0) {
+      return {
+        toolCallId: toolCall.id,
+        tool: toolCall.tool,
+        status: 'blocked',
+        summary: 'Patch edits payload was empty or invalid'
+      };
+    }
+    const result = applyStructuredEdits(current, edits);
+    if (!result.updatedText) {
+      return {
+        toolCallId: toolCall.id,
+        tool: toolCall.tool,
+        status: 'blocked',
+        summary: result.failure || 'Patch application failed'
+      };
+    }
+    writeFileSync(targetPath, result.updatedText, 'utf8');
+    return {
+      toolCallId: toolCall.id,
+      tool: toolCall.tool,
+      status: 'executed',
+      summary: `Applied ${edits.length} patch edit(s) to ${relative(root, targetPath)}`
+    };
+  }
+
+  return {
+    toolCallId: toolCall.id,
+    tool: toolCall.tool,
+    status: 'blocked',
+    summary: 'Patch payload missing; expected replaceFile, appendText, or edits'
+  };
+}
+
+export function executeApprovalToolCall(
+  toolCall: ToolCall,
+  request: ChatTurnRequest,
+  cwd: string | undefined,
+  allowedCommands: string[],
+  config?: SidecarConfig['execution']
+): ToolObservation {
   const root = cwd || process.cwd();
   if (!toolCall.requiresApproval) {
     return {
@@ -171,6 +417,9 @@ export function executeApprovalToolCall(toolCall: ToolCall, cwd: string | undefi
       summary: 'Tool does not require approval execution'
     };
   }
+
+  const timeoutMs = config?.timeoutMs || DEFAULT_TIMEOUT_MS;
+  const maxOutputBytes = config?.maxOutputBytes || DEFAULT_MAX_OUTPUT_BYTES;
 
   switch (toolCall.tool) {
     case 'run_terminal': {
@@ -191,22 +440,25 @@ export function executeApprovalToolCall(toolCall: ToolCall, cwd: string | undefi
           summary: `Command blocked by allowlist: ${command}`
         };
       }
-      const output = safeExec('powershell', ['-NoProfile', '-Command', command], root);
-      return {
-        toolCallId: toolCall.id,
-        tool: toolCall.tool,
-        status: output === undefined ? 'blocked' : 'executed',
-        summary: output === undefined ? `Command failed: ${command}` : output.slice(0, 1800) || 'Command completed with no output'
-      };
-    }
-    case 'apply_patch': {
-      const target = typeof toolCall.input.target === 'string' ? toolCall.input.target : 'unknown-target';
+      const output = safeExec('powershell', ['-NoProfile', '-Command', command], root, timeoutMs);
+      if (output === undefined) {
+        return {
+          toolCallId: toolCall.id,
+          tool: toolCall.tool,
+          status: 'blocked',
+          summary: `Command timed out or failed after ${timeoutMs}ms: ${command}`
+        };
+      }
+      const { text: truncatedOutput, truncated } = truncateOutput(output, maxOutputBytes);
       return {
         toolCallId: toolCall.id,
         tool: toolCall.tool,
         status: 'executed',
-        summary: `apply_patch approved for ${target}; execution is stubbed in Iteration 1`
+        summary: truncated ? `${truncatedOutput}[Output truncated]` : truncatedOutput || 'Command completed with no output'
       };
+    }
+    case 'apply_patch': {
+      return executeApplyPatch(toolCall, request, root);
     }
     default:
       return {

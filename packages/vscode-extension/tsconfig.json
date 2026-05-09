@@ -3,8 +3,13 @@
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist",
+    "types": [
+      "node",
+      "vscode"
+    ],
     "lib": [
-      "ES2022"
+      "ES2022",
+      "DOM"
     ]
   },
   "include": [

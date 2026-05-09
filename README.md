@@ -33,7 +33,7 @@ MiniCode is designed for teams and developers who want:
 
 - Capability-based routing across `fast`, `completion`, `chat`, `reasoning`, and `embedding` workloads
 - Support for local models, OpenAI-compatible services, ModelScope endpoints, and self-hosted providers
-- Routing policies based on task type, with fallback strategy reserved for a later iteration
+- Routing policies based on task type, with provider-level fallback and retry policies reserved for a later iteration
 
 ### Agent execution
 
@@ -45,7 +45,7 @@ MiniCode is designed for teams and developers who want:
 
 - Context injection from active file, current selection, visible editors, diagnostics, dependency hints, Git state, and project index
 - Project-level understanding powered by `features.json` and synchronized development metadata
-- Prompt rendering paths tailored for chat and completion workflows; file-based YAML templates are planned next
+- YAML-backed prompt templates for chat and completion, with versioned loading and explicit fallback/error behavior
 
 ### Security and control
 
@@ -145,7 +145,7 @@ MiniCode uses versioned prompt templates for different coding workflows:
 - code reasoning
 - agent tool use
 
-Prompt updates are evaluated through scenario-based tests before rollout. YAML-backed prompt templates are planned, not yet the current implementation.
+Prompt updates are evaluated through scenario-based tests before rollout. Prompt bodies now load from `packages/agent-sidecar/prompts/*.yaml`, and prompt version telemetry reflects the template version that was actually rendered.
 
 ### Agent runtime
 
@@ -158,6 +158,8 @@ The runtime supports a full agent workflow:
 5. propose or execute tools
 6. collect observations
 7. continue reasoning until completion
+
+The sidecar also exposes `POST /chat/stream` as an HTTP SSE endpoint. The VS Code extension consumes that stream and appends markdown chunks as they arrive. Stable VS Code chat APIs do not currently provide fine-grained replacement of previously streamed text, so the extension uses append-only chunk rendering rather than token-level reflow.
 
 ### Security model
 
@@ -264,7 +266,12 @@ MINICODE_MODEL_COMPLETION=qwen-coder-plus
 MINICODE_MODEL_FAST=qwen2.5-coder-7b-instruct
 MINICODE_MODEL_EMBEDDING=bge-m3
 MINICODE_ALLOWED_COMMANDS=npm test,npm run build,git status
-MINICODE_PROMPT_VERSION=v1
+MINICODE_PROMPT_VERSION=v2
+MINICODE_PROMPT_DIRECTORY=packages/agent-sidecar/prompts
+MINICODE_PROMPT_FALLBACK=built-in
+MINICODE_CACHE_ENABLED=true
+MINICODE_CACHE_MAX_ENTRIES=100
+MINICODE_STREAM_SSE_PATH=/chat/stream
 ```
 
 ---
@@ -298,6 +305,10 @@ npm run check
 ### Run the Iteration 1 demo
 
 Use the `MiniCode Extension Demo` launch configuration in `.vscode/launch.json`, then follow [docs/iteration-1-demo.md](docs/iteration-1-demo.md).
+
+### Run the Iteration 2 demo
+
+Use the same launch configuration, then follow [docs/iteration-2-demo.md](docs/iteration-2-demo.md) to verify YAML prompt loading, SSE chat streaming, and cache hits.
 
 ---
 

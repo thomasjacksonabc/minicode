@@ -69,6 +69,19 @@ export interface UsageMetrics {
   promptVersion: string;
 }
 
+export interface ResponseCacheMetadata {
+  scope: 'chat' | 'completion';
+  key: string;
+  hit: boolean;
+}
+
+export interface StreamingMetadata {
+  transport: 'sse';
+  path?: string;
+  firstEventLatencyMs?: number;
+  completed?: boolean;
+}
+
 export interface ChatTurnResponse {
   sessionId: string;
   mode: AgentMode;
@@ -79,6 +92,8 @@ export interface ChatTurnResponse {
     pending: boolean;
     resumedFromToolCallId?: string;
   };
+  cache?: ResponseCacheMetadata;
+  streaming?: StreamingMetadata;
   summary?: string;
   metrics?: UsageMetrics;
 }
@@ -113,8 +128,43 @@ export interface CompletionResponse {
     text: string;
     detail: string;
   }>;
+  cache?: ResponseCacheMetadata;
   metrics?: UsageMetrics;
 }
+
+export interface ChatStreamStartEvent {
+  type: 'start';
+  sessionId: string;
+  mode: AgentMode;
+  promptVersion: string;
+  cache?: ResponseCacheMetadata;
+}
+
+export interface ChatStreamDeltaEvent {
+  type: 'message_delta';
+  delta: string;
+}
+
+export interface ChatStreamFinalEvent {
+  type: 'final';
+  response: ChatTurnResponse;
+}
+
+export interface ChatStreamErrorEvent {
+  type: 'error';
+  message: string;
+}
+
+export interface ChatStreamDoneEvent {
+  type: 'done';
+}
+
+export type ChatStreamEvent =
+  | ChatStreamStartEvent
+  | ChatStreamDeltaEvent
+  | ChatStreamFinalEvent
+  | ChatStreamErrorEvent
+  | ChatStreamDoneEvent;
 
 export type FeatureStatus = 'planned' | 'in_progress' | 'done' | 'blocked';
 export type FeatureArea = 'extension' | 'sidecar' | 'shared' | 'infra' | 'docs';

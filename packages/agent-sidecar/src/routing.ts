@@ -17,7 +17,7 @@ function capabilityForMode(mode: AgentMode, prompt: string): ModelCapability {
     return 'reasoning';
   }
   if (mode === 'explore') {
-    return 'embedding';
+    return 'chat';
   }
   if (mode === 'ask') {
     return 'chat';

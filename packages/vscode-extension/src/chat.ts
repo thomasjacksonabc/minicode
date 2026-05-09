@@ -1,8 +1,8 @@
 import * as crypto from 'node:crypto';
 import * as vscode from 'vscode';
-import { approveTool, runChat } from './api.js';
+import { approveTool, runChat, runChatStream } from './api.js';
 import { getWorkspaceRoot, readDependencyHints, readGitSnapshot, summarizeFeatures, summarizeWorkspace } from './projectIndex.js';
-import type { AgentMode, AttachmentRef, ChatTurnRequest, ChatTurnResponse } from './types.js';
+import type { AgentMode, AttachmentRef, ChatStreamEvent, ChatTurnRequest, ChatTurnResponse } from './types.js';
 
 function modeFromPrompt(prompt: string): AgentMode {
   if (prompt.startsWith('/plan')) {
@@ -70,8 +70,7 @@ async function buildRequest(prompt: string): Promise<ChatTurnRequest> {
 export function registerChatParticipant(context: vscode.ExtensionContext): void {
   const participant = vscode.chat.createChatParticipant('minicode.assistant', async (request, chatContext, stream) => {
     try {
-      const result = await runChat(await buildRequest(request.prompt));
-      renderChatResult(stream, result);
+      const result = await runStreamingChat(stream, await buildRequest(request.prompt));
       await processPendingToolCalls(stream, result);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -82,6 +81,47 @@ export function registerChatParticipant(context: vscode.ExtensionContext): void 
 
   participant.iconPath = new vscode.ThemeIcon('sparkle');
   context.subscriptions.push(participant);
+}
+
+async function runStreamingChat(stream: vscode.ChatResponseStream, request: ChatTurnRequest): Promise<ChatTurnResponse> {
+  let streamed = '';
+  let finalResponse: ChatTurnResponse | undefined;
+  let started = false;
+
+  try {
+    finalResponse = await runChatStream(request, async (event: ChatStreamEvent) => {
+      switch (event.type) {
+        case 'start':
+          started = true;
+          break;
+        case 'message_delta':
+          streamed += event.delta;
+          stream.markdown(event.delta);
+          break;
+        case 'final':
+          finalResponse = event.response;
+          renderChatResult(stream, event.response, false, streamed.length > 0);
+          break;
+        case 'error':
+          throw new Error(event.message);
+        case 'done':
+          break;
+      }
+    });
+    return finalResponse;
+  } catch (error) {
+    if (finalResponse) {
+      return finalResponse;
+    }
+    if (started || streamed.length > 0) {
+      const message = error instanceof Error ? error.message : String(error);
+      stream.markdown(`\n\nStreaming interrupted before the final response completed: ${message}`);
+      throw error;
+    }
+    const fallback = await runChat(request);
+    renderChatResult(stream, fallback);
+    return fallback;
+  }
 }
 
 async function processPendingToolCalls(stream: vscode.ChatResponseStream, result: ChatTurnResponse): Promise<void> {
@@ -117,11 +157,15 @@ async function processPendingToolCalls(stream: vscode.ChatResponseStream, result
   }
 }
 
-function renderChatResult(stream: vscode.ChatResponseStream, result: ChatTurnResponse, isContinuation = false): void {
+function renderChatResult(stream: vscode.ChatResponseStream, result: ChatTurnResponse, isContinuation = false, messageAlreadyStreamed = false): void {
   if (isContinuation) {
     stream.markdown('\n\n---');
   }
-  stream.markdown(isContinuation ? `\n\nContinuation:\n\n${result.message}` : result.message);
+  if (isContinuation) {
+    stream.markdown(`\n\nContinuation:\n\n${result.message}`);
+  } else if (!messageAlreadyStreamed) {
+    stream.markdown(result.message);
+  }
   if (result.continuation?.pending) {
     stream.markdown('\n\nPending tool approvals remain.');
   }
@@ -136,6 +180,14 @@ function renderChatResult(stream: vscode.ChatResponseStream, result: ChatTurnRes
     stream.markdown(
       `\n\nModel: ${result.metrics.model} | Route: ${result.metrics.capability} | Latency: ${result.metrics.durationMs} ms | Est. cost: $${result.metrics.estimatedCostUsd}`
     );
+  }
+  if (result.cache) {
+    stream.markdown(`\n\nCache: ${result.cache.hit ? 'hit' : 'miss'} (${result.cache.scope})`);
+  }
+  if (result.streaming?.transport === 'sse') {
+    const timing =
+      typeof result.streaming.firstEventLatencyMs === 'number' ? ` | First chunk: ${result.streaming.firstEventLatencyMs} ms` : '';
+    stream.markdown(`\n\nStreaming: SSE${timing}`);
   }
 }
 

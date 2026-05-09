@@ -14,6 +14,7 @@
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
-    "@minicode/shared": "0.1.0"
+    "@minicode/shared": "0.1.0",
+    "js-yaml": "^4.1.1"
   }
 }

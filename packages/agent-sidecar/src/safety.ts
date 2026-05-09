@@ -23,8 +23,35 @@ const OUTPUT_FILTER_RULES = [
     pattern: /\b(sudo|bypass|disable).*(guardrail|approval|safety)|ignore previous instructions/i,
     replacement: '[filtered unsafe privilege escalation guidance]',
     warning: 'Filtered unsafe privilege escalation guidance from output'
+  },
+  {
+    pattern: /\b(AKIA|ABIA|ACCA|AGPA|AIDA|AIMA|AIPA|AKA|ANPA|ANVA|APKA|AROA|ASCA|ASIA|ASRA|ATRA)[A-Z0-9]{16}\b/,
+    replacement: '[filtered AWS access key]',
+    warning: 'Filtered potential AWS access key from output'
+  },
+  {
+    pattern: /-----BEGIN (RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----/,
+    replacement: '[filtered private key block]',
+    warning: 'Filtered private key from output'
+  },
+  {
+    pattern: /\bghp_[a-zA-Z0-9]{36}\b/,
+    replacement: '[filtered GitHub token]',
+    warning: 'Filtered GitHub personal access token from output'
+  },
+  {
+    pattern: /\b[xX][nN]--[a-zA-Z0-9]+\.[a-zA-Z0-9]+\.[a-zA-Z0-9]+\b/,
+    replacement: '[filtered domain ownership proof]',
+    warning: 'Filtered potential domain ownership token from output'
+  },
+  {
+    pattern: /eval\s*\(|exec\s*\(|child_process|spawn\s*\(|popen\s*\(/i,
+    replacement: '[filtered code execution pattern]',
+    warning: 'Filtered potential code execution pattern from output'
   }
 ] as const;
+
+const MAX_OUTPUT_SIZE = 50 * 1024;
 
 export interface SafetyReview {
   sanitizedPrompt: string;
@@ -35,6 +62,7 @@ export interface SafetyReview {
 export interface OutputFilterResult {
   sanitizedText: string;
   warnings: string[];
+  truncated: boolean;
 }
 
 export function reviewPrompt(prompt: string): SafetyReview {
@@ -63,6 +91,13 @@ export function reviewToolCalls(toolCalls: ToolCall[], allowedCommands: string[]
 export function filterOutputText(text: string): OutputFilterResult {
   let sanitizedText = text;
   const warnings: string[] = [];
+  let truncated = false;
+
+  if (text.length > MAX_OUTPUT_SIZE) {
+    sanitizedText = text.slice(0, MAX_OUTPUT_SIZE);
+    truncated = true;
+    warnings.push(`Output truncated from ${text.length} to ${MAX_OUTPUT_SIZE} characters to prevent DoS`);
+  }
 
   for (const rule of OUTPUT_FILTER_RULES) {
     if (rule.pattern.test(sanitizedText)) {
@@ -73,6 +108,22 @@ export function filterOutputText(text: string): OutputFilterResult {
 
   return {
     sanitizedText,
-    warnings
+    warnings,
+    truncated
   };
+}
+
+export function isCommandRisky(command: string): boolean {
+  const riskyPatterns = [
+    /\b(nc|netcat|ncat)\b.*(-e|--exec)/i,
+    /\bwget\b.*(-O|--output-document)/i,
+    /\bcurl\b.*(-o|--output)/i,
+    /\bpython\b.*(-c|--command)/i,
+    /\bnode\b.*(-e|--eval)/i,
+    /\bruby\b.*(-e|--exec)/i,
+    /\bperl\b.*(-e|-E)/i,
+    /\bbash\b.*(-c)/i,
+    /\bsh\b.*(-c)/i
+  ];
+  return riskyPatterns.some((pattern) => pattern.test(command));
 }

@@ -1,0 +1,64 @@
+name: chat-default
+version: v2
+scenario: chat
+capabilities:
+  - chat
+  - reasoning
+  - fast
+variables:
+  - mode
+  - promptVersion
+  - capability
+  - executionPolicy
+  - safetyWarnings
+  - userPrompt
+  - openEditors
+  - relatedFiles
+  - dependencyHints
+  - selection
+  - projectIndexSummary
+  - workspaceSummary
+  - gitStatus
+  - gitDiff
+  - diagnostics
+  - visibleDocuments
+  - retrievalQuery
+  - retrievalResults
+  - observations
+messages:
+  system: |
+    You are MiniCode, an AI coding assistant operating in {{mode}} mode.
+    Prompt template version: {{promptVersion}}.
+    Selected capability: {{capability}}.
+    {{executionPolicy}}
+    Respect project architecture, existing conventions, and user-provided constraints.
+    {{safetyWarnings}}
+  user: |
+    User prompt:
+    {{userPrompt}}
+
+    {{openEditors}}
+
+    {{relatedFiles}}
+
+    {{dependencyHints}}
+
+    {{selection}}
+
+    {{projectIndexSummary}}
+
+    {{workspaceSummary}}
+
+    {{gitStatus}}
+
+    {{gitDiff}}
+
+    {{diagnostics}}
+
+    {{visibleDocuments}}
+
+    {{retrievalQuery}}
+
+    {{retrievalResults}}
+
+    {{observations}}
